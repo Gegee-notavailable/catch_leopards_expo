@@ -1,98 +1,127 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, Alert } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import * as ImagePicker from 'expo-image-picker'; // ตัวช่วยเปิดกล้อง
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+export default function App() {
+  const [isScanning, setIsScanning] = useState(false);
 
-export default function HomeScreen() {
+  // ฟังก์ชันสำหรับเปิดกล้อง
+  const openCamera = async () => {
+    // 1. ขออนุญาตเข้าถึงกล้อง
+    const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+
+    if (permissionResult.granted === false) {
+      Alert.alert("ขออภัย", "แอปต้องการสิทธิ์เข้าถึงกล้องเพื่อสแกนครับ");
+      return;
+    }
+
+    // 2. เปิดกล้องถ่ายรูป
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: false, // ถ่ายเสร็จใช้เลย ไม่ต้องตัดรูป
+      quality: 0.7,        // ความชัดกำลังดี ไฟล์ไม่หนักเกินไป
+    });
+
+    if (!result.canceled) {
+      // ตรงนี้คือจุดที่เพื่อนที่เทรนโมเดลจะเอาไปใช้ต่อ
+      Alert.alert("ถ่ายรูปสำเร็จ!", "กำลังส่งภาพไปวิเคราะห์หาเสือดาว...");
+      console.log("รูปที่ถ่ายได้:", result.assets[0].uri);
+    }
+  };
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <SafeAreaView style={styles.container}>
+      <Text style={styles.title}>CATCH LEOPARDS</Text>
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+      <View style={styles.centerArea}>
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPressIn={() => setIsScanning(true)}
+          onPressOut={() => setIsScanning(false)}
+          onPress={openCamera} // กดแล้วเปิดกล้อง
+        >
+          <LinearGradient
+            colors={['#4CAF50', '#2E7D32']}
+            style={[styles.scanButton, isScanning && styles.scanButtonActive]}
+          >
+            <View style={styles.innerCircle}>
+              <Text style={styles.buttonText}>
+                {isScanning ? "SCANNING..." : "START\nMONITORING"}
+              </Text>
+            </View>
+          </LinearGradient>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.footer}>
+        <Text style={styles.footerText}>AI Wildlife Protection System</Text>
+        <Text style={styles.statusText}>● System Online</Text>
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
+  container: {
+    flex: 1,
+    backgroundColor: '#121212',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
+    paddingVertical: 50
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  title: {
+    color: '#4CAF50',
+    fontSize: 28,
+    fontWeight: 'bold',
+    marginTop: 40,
+    letterSpacing: 2
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  centerArea: {
+    flex: 1,
+    justifyContent: 'center'
   },
+  scanButton: {
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 15,
+    shadowColor: '#4CAF50',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.6,
+    shadowRadius: 20
+  },
+  innerCircle: {
+    width: 240,
+    height: 240,
+    borderRadius: 120,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scanButtonActive: {
+    transform: [{ scale: 0.92 }]
+  },
+  buttonText: {
+    color: 'white',
+    fontSize: 20,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    lineHeight: 28
+  },
+  footer: {
+    alignItems: 'center'
+  },
+  footerText: {
+    color: '#666',
+    fontSize: 12,
+    marginBottom: 5
+  },
+  statusText: {
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: '500'
+  }
 });
