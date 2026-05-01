@@ -1,127 +1,101 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, Alert } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as ImagePicker from 'expo-image-picker'; // ตัวช่วยเปิดกล้อง
+import { db } from '../../firebaseConfig'; // ดึงค่า db (Firestore) มาใช้
+import { collection, addDoc } from "firebase/firestore";
 
 export default function App() {
-  const [isScanning, setIsScanning] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
+  const [isMonitoring, setIsMonitoring] = useState(false);
+  const cameraRef = useRef<any>(null);
 
-  // ฟังก์ชันสำหรับเปิดกล้อง
-  const openCamera = async () => {
-    // 1. ขออนุญาตเข้าถึงกล้อง
-    const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+  // ฟังก์ชันถ่ายรูปแล้วแปลงเป็น Base64 ส่งเข้า Firestore
+  const captureAndUploadAsBase64 = async () => {
+    if (cameraRef.current && isMonitoring) {
+      try {
+        // 1. ถ่ายรูปและบังคับให้เป็น Base64
+        // บีบคุณภาพเหลือ 0.1 เพื่อให้ไฟล์เล็กพอที่จะลง Firestore (ห้ามเกิน 1MB)
+        const photo = await cameraRef.current.takePictureAsync({ 
+          quality: 0.1, 
+          base64: true,
+          skipProcessing: true 
+        });
 
-    if (permissionResult.granted === false) {
-      Alert.alert("ขออภัย", "แอปต้องการสิทธิ์เข้าถึงกล้องเพื่อสแกนครับ");
-      return;
-    }
+        if (photo.base64) {
+          // 2. ส่ง "ตัวอักษรรูปภาพ" เข้า Firestore ตรงๆ
+          const docRef = await addDoc(collection(db, "monitoring_logs"), {
+            imageBase64: `data:image/jpg;base64,${photo.base64}`, // เก็บเป็น String
+            timestamp: new Date().toISOString(),
+            status: "searching",
+            device: "iPhone_Intern"
+          });
 
-    // 2. เปิดกล้องถ่ายรูป
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: false, // ถ่ายเสร็จใช้เลย ไม่ต้องตัดรูป
-      quality: 0.7,        // ความชัดกำลังดี ไฟล์ไม่หนักเกินไป
-    });
-
-    if (!result.canceled) {
-      // ตรงนี้คือจุดที่เพื่อนที่เทรนโมเดลจะเอาไปใช้ต่อ
-      Alert.alert("ถ่ายรูปสำเร็จ!", "กำลังส่งภาพไปวิเคราะห์หาเสือดาว...");
-      console.log("รูปที่ถ่ายได้:", result.assets[0].uri);
+          console.log("✅ String Sent! Doc ID:", docRef.id);
+        }
+      } catch (err) {
+        console.error("❌ Firestore Upload Failed:", err);
+      }
     }
   };
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>CATCH LEOPARDS</Text>
+  // ตั้งเวลาให้ทำงานทุก 3 วินาที
+  useEffect(() => {
+    let interval: any;
+    if (isMonitoring) {
+      interval = setInterval(captureAndUploadAsBase64, 3000);
+    }
+    return () => clearInterval(interval);
+  }, [isMonitoring]);
 
-      <View style={styles.centerArea}>
-        <TouchableOpacity
-          activeOpacity={0.8}
-          onPressIn={() => setIsScanning(true)}
-          onPressOut={() => setIsScanning(false)}
-          onPress={openCamera} // กดแล้วเปิดกล้อง
-        >
-          <LinearGradient
-            colors={['#4CAF50', '#2E7D32']}
-            style={[styles.scanButton, isScanning && styles.scanButtonActive]}
-          >
-            <View style={styles.innerCircle}>
-              <Text style={styles.buttonText}>
-                {isScanning ? "SCANNING..." : "START\nMONITORING"}
-              </Text>
-            </View>
-          </LinearGradient>
+  if (!permission) return <View />;
+  if (!permission.granted) {
+    return (
+      <View style={styles.container}>
+        <TouchableOpacity onPress={requestPermission} style={styles.permissionBtn}>
+          <Text style={{ color: 'white', fontWeight: 'bold' }}>ขอสิทธิ์ใช้กล้อง</Text>
         </TouchableOpacity>
       </View>
+    );
+  }
 
-      <View style={styles.footer}>
-        <Text style={styles.footerText}>AI Wildlife Protection System</Text>
-        <Text style={styles.statusText}>● System Online</Text>
+  return (
+    <SafeAreaView style={styles.container}>
+      <Text style={styles.title}>LEOPARD MONITOR</Text>
+      
+      <View style={styles.centerArea}>
+        {isMonitoring ? (
+          <View style={styles.cameraWrapper}>
+            <CameraView style={styles.camera} ref={cameraRef} />
+            <TouchableOpacity onPress={() => setIsMonitoring(false)} style={styles.stopBtn}>
+              <Text style={styles.buttonText}>STOP MONITORING</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity onPress={() => setIsMonitoring(true)}>
+            <LinearGradient colors={['#4CAF50', '#2E7D32']} style={styles.scanButton}>
+              <Text style={styles.buttonText}>START{"\n"}REAL-TIME</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        )}
       </View>
+
+      <Text style={styles.footerText}>
+        ● {isMonitoring ? 'SENDING STRINGS TO FIRESTORE' : 'SYSTEM READY'}
+      </Text>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#121212',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 50
-  },
-  title: {
-    color: '#4CAF50',
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginTop: 40,
-    letterSpacing: 2
-  },
-  centerArea: {
-    flex: 1,
-    justifyContent: 'center'
-  },
-  scanButton: {
-    width: 260,
-    height: 260,
-    borderRadius: 130,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 15,
-    shadowColor: '#4CAF50',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.6,
-    shadowRadius: 20
-  },
-  innerCircle: {
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  scanButtonActive: {
-    transform: [{ scale: 0.92 }]
-  },
-  buttonText: {
-    color: 'white',
-    fontSize: 20,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    lineHeight: 28
-  },
-  footer: {
-    alignItems: 'center'
-  },
-  footerText: {
-    color: '#666',
-    fontSize: 12,
-    marginBottom: 5
-  },
-  statusText: {
-    color: '#4CAF50',
-    fontSize: 12,
-    fontWeight: '500'
-  }
+  container: { flex: 1, backgroundColor: '#121212', alignItems: 'center', justifyContent: 'center' },
+  title: { color: '#4CAF50', fontSize: 26, fontWeight: 'bold', position: 'absolute', top: 70, letterSpacing: 2 },
+  centerArea: { width: '100%', alignItems: 'center' },
+  scanButton: { width: 220, height: 220, borderRadius: 110, justifyContent: 'center', alignItems: 'center', elevation: 10 },
+  cameraWrapper: { width: '85%', height: 400, borderRadius: 20, overflow: 'hidden', borderWidth: 3, borderColor: '#4CAF50' },
+  camera: { flex: 1 },
+  stopBtn: { backgroundColor: '#FF5252', padding: 15, alignItems: 'center' },
+  buttonText: { color: 'white', fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
+  footerText: { color: '#4CAF50', position: 'absolute', bottom: 50, fontSize: 12 },
+  permissionBtn: { backgroundColor: '#4CAF50', padding: 20, borderRadius: 10 }
 });
