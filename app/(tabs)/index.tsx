@@ -1,154 +1,220 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, ScrollView, Dimensions, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { Picker } from '@react-native-picker/picker';
+import { StyleSheet, Text, View, Dimensions, TouchableOpacity, ActivityIndicator, SafeAreaView, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
 import { db, auth } from '../firebaseConfig';
-import { collection, query, where, orderBy, limit, onSnapshot, Timestamp, getDocs } from "firebase/firestore";
-import { signOut } from 'firebase/auth';
-import { BarChart } from "react-native-chart-kit";
+import { collection, query, where, orderBy, Timestamp, getDocs } from "firebase/firestore";
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+// 1. เพิ่ม Monthly เข้าไปในฟิลเตอร์
+const FILTERS = [
+  { id: 'day', label: "Today's Report" },
+  { id: 'week', label: "Weekly's Report" },
+  { id: 'month', label: "Monthly's Report" }
+];
+
+const SingleBarChart = ({ labels, data }: { labels: string[], data: number[] }) => {
+  const chartHeight = 180;
+  const maxVal = Math.max(...data, 5);
+  const yAxisLabels = [maxVal, Math.floor(maxVal / 2), 0];
+  const groupWidth = (SCREEN_WIDTH - 80) / (labels.length || 1);
+
+  return (
+    <View style={styles.chartContainer}>
+      <View style={styles.yAxis}>
+        {yAxisLabels.map((l, i) => (
+          <Text key={i} style={styles.axisText}>{String(l)}</Text>
+        ))}
+      </View>
+
+      <View style={{ flex: 1 }}>
+        <View style={styles.chartArea}>
+          {data.map((val, i) => (
+            <View key={i} style={[styles.barGroup, { width: groupWidth }]}>
+              <View style={styles.barWrapper}>
+                <Text style={styles.barVal}>{val > 0 ? String(val) : ""}</Text>
+                <View style={[
+                  styles.bar,
+                  { backgroundColor: '#4CAF50', height: (val / maxVal) * chartHeight, width: groupWidth * 0.5 }
+                ]} />
+              </View>
+            </View>
+          ))}
+        </View>
+        <View style={styles.xAxis}>
+          {labels.map((l, i) => (
+            <Text key={i} style={[styles.axisText, { width: groupWidth, textAlign: 'center' }]}>{l}</Text>
+          ))}
+        </View>
+      </View>
+    </View>
+  );
+};
 
 export default function FarmerDashboard() {
   const router = useRouter();
-  const [filter, setFilter] = useState('day');
-  const [latest, setLatest] = useState<any>(null);
-  const [chartData, setChartData] = useState<number[]>([0, 0, 0, 0, 0, 0, 0]);
+  const [activeIndex, setActiveIndex] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [chartData, setChartData] = useState({ labels: [], values: [] });
 
-  // 1. ดึงข้อมูลตัวล่าสุดแบบ Real-time (CCTV Alert)
   useEffect(() => {
-    const qLatest = query(
-      collection(db, "detections"),
-      orderBy("timestamp", "desc"),
-      limit(1)
-    );
-
-    const unsubscribe = onSnapshot(qLatest, (snapshot) => {
-      if (!snapshot.empty) {
-        setLatest(snapshot.docs[0].data());
-      }
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, []);
-
-  // 2. ดึงข้อมูลมาพล็อตกราฟตาม Filter (Day/Week/Month)
-  useEffect(() => {
-    const fetchStats = async () => {
+    const fetchData = async () => {
+      setLoading(true);
+      const filter = FILTERS[activeIndex].id;
       const now = new Date();
-      let startDate = new Date();
+      const start = new Date();
 
-      if (filter === 'day') startDate.setHours(0, 0, 0, 0);
-      else if (filter === 'week') startDate.setDate(now.getDate() - 7);
-      else startDate.setMonth(now.getMonth() - 1);
+      // ตั้งค่าช่วงเวลาตาม Filter
+      if (filter === 'day') {
+        start.setHours(0, 0, 0, 0);
+      } else if (filter === 'week') {
+        start.setDate(now.getDate() - 6);
+        start.setHours(0, 0, 0, 0);
+      } else if (filter === 'month') {
+        start.setDate(now.getDate() - 29); // ย้อนหลัง 30 วัน
+        start.setHours(0, 0, 0, 0);
+      }
 
-      const qStats = query(
-        collection(db, "detections"),
-        where("timestamp", ">=", Timestamp.fromDate(startDate)),
-        orderBy("timestamp", "asc")
-      );
+      try {
+        const q = query(
+          collection(db, "detection_logs"),
+          where("timestamp", ">=", Timestamp.fromDate(start)),
+          orderBy("timestamp", "asc")
+        );
+        const snap = await getDocs(q);
+        const logs = snap.docs.map(d => d.data());
 
-      const querySnapshot = await getDocs(qStats);
-      // ตรงนี้คือส่วนประมวลผลจำนวนสัตว์ที่พบเพื่อใส่ในกราฟ
-      // ตัวอย่าง: ถ้าเจอข้อมูล 5 รายการในช่วงที่เลือก
-      const count = querySnapshot.size;
-      setChartData([count, count + 2, count - 1, count + 5, count, count + 1, count + 3]);
+        let labels: string[] = [];
+        let values: number[] = [];
+
+        if (filter === 'day') {
+          labels = ["00-06h", "06-12h", "12-18h", "18-00h"];
+          values = [0, 0, 0, 0];
+          logs.forEach(log => {
+            const h = log.timestamp.toDate().getHours();
+            const label = (log.detections?.[0]?.label || "").toLowerCase();
+            const idx = Math.min(Math.floor(h / 6), 3);
+            if (label.includes('wild')) values[idx]++;
+          });
+        } else if (filter === 'week') {
+          // รายสัปดาห์ (อ้างอิงตามวันปัจจุบัน)
+          const dayLabels = [];
+          for (let i = 6; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(now.getDate() - i);
+            dayLabels.push(d.toLocaleDateString('en-US', { weekday: 'short' }));
+          }
+          labels = dayLabels;
+          values = Array(7).fill(0);
+          logs.forEach(log => {
+            const logDate = log.timestamp.toDate();
+            const dayName = logDate.toLocaleDateString('en-US', { weekday: 'short' });
+            const labelIdx = labels.indexOf(dayName);
+            const labelStr = (log.detections?.[0]?.label || "").toLowerCase();
+            if (labelStr.includes('wild') && labelIdx !== -1) values[labelIdx]++;
+          });
+        } else if (filter === 'month') {
+          // 2. รายเดือน: แบ่งเป็น 4 สัปดาห์
+          labels = ["W1", "W2", "W3", "W4"];
+          values = [0, 0, 0, 0];
+          logs.forEach(log => {
+            const logDate = log.timestamp.toDate();
+            const diffTime = now.getTime() - logDate.getTime();
+            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+            // แบ่งช่วง 30 วันเป็น 4 บาร์ (ประมาณช่วงละ 7-8 วัน)
+            const weekIdx = Math.min(Math.floor(diffDays / 7.5), 3);
+            const labelStr = (log.detections?.[0]?.label || "").toLowerCase();
+            if (labelStr.includes('wild')) {
+              values[3 - weekIdx]++; // 3-weekIdx เพื่อให้สัปดาห์ล่าสุดอยู่ขวาสุด
+            }
+          });
+        }
+        setChartData({ labels, values });
+      } catch (err) {
+        console.error("Fetch Error:", err);
+      } finally {
+        setLoading(false);
+      }
     };
-
-    fetchStats();
-  }, [filter]);
-
-  const handleLogout = async () => {
-    await signOut(auth); // ดีดกลับไปหน้า Login อัตโนมัติ
-  };
-
-  if (loading) return <ActivityIndicator size="large" color="#4CAF50" style={{ flex: 1, backgroundColor: '#121212' }} />;
+    fetchData();
+  }, [activeIndex]);
 
   return (
-    <ScrollView style={styles.container}>
-      {/* ส่วนหัวและปุ่ม Logout */}
-      <View style={styles.headerRow}>
-        <Text style={styles.header}>FARMER DASHBOARD</Text>
-        <TouchableOpacity onPress={handleLogout}>
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.headerTitle}>WILD ANIMAL DETECTION</Text>
+          <Text style={styles.headerSub}>Security Node: Active</Text>
+        </View>
+        <TouchableOpacity style={styles.logoutBtn} onPress={() => auth.signOut()}>
           <Text style={styles.logoutTxt}>LOGOUT</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Dropdown เลือกช่วงเวลา (สอดคล้องกับหัวข้อวิจัย) */}
-      <View style={styles.pickerBox}>
-        <Picker
-          selectedValue={filter}
-          onValueChange={(itemValue) => setFilter(itemValue)}
-          style={{ color: 'white' }}
-          dropdownIconColor="#4CAF50"
-        >
-          <Picker.Item label="Today's Report" value="day" />
-          <Picker.Item label="Weekly Overview" value="week" />
-          <Picker.Item label="Monthly Analytics" value="month" />
-        </Picker>
+      <View style={styles.filterBar}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          {FILTERS.map((f, i) => (
+            <TouchableOpacity
+              key={f.id}
+              style={[styles.tab, activeIndex === i && styles.activeTab]}
+              onPress={() => setActiveIndex(i)}
+            >
+              <Text style={[styles.tabTxt, activeIndex === i && styles.activeTabTxt]}>{f.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
       </View>
 
-      {/* บัตรแจ้งเตือนล่าสุดจาก CCTV (DroidCam + YOLO) */}
-      <View style={styles.alertCard}>
-        <Text style={styles.cardTitle}>⚠️ LATEST CCTV DETECTION</Text>
-        {latest ? (
-          <View>
-            <Text style={styles.alertText}>{latest.animal_type}</Text>
-            <Text style={styles.subText}>Confidence: {(latest.confidence * 100).toFixed(2)}%</Text>
-            <Text style={styles.subText}>Time: {new Date(latest.timestamp?.seconds * 1000).toLocaleString()}</Text>
-          </View>
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Intrusion Frequency (Wild Animal Only)</Text>
+        {loading ? (
+          <ActivityIndicator color="#4CAF50" size="large" style={{ height: 220 }} />
         ) : (
-          <Text style={styles.subText}>No activity detected from CCTV...</Text>
+          <SingleBarChart labels={chartData.labels} data={chartData.values} />
         )}
+        <View style={styles.legend}>
+          <View style={styles.legendItem}>
+            <View style={[styles.dot, { backgroundColor: '#4CAF50' }]} />
+            <Text style={styles.legendTxt}>WILD ANIMAL DETECTED</Text>
+          </View>
+        </View>
       </View>
 
-      {/* ส่วนแสดงกราฟสถิติจริงจาก Firebase */}
-      <Text style={styles.sectionTitle}>Detection Statistics ({filter})</Text>
-      <BarChart
-        data={{
-          labels: filter === 'day' ? ["00:00", "06:00", "12:00", "18:00", "21:00", "23:00"] : ["M", "T", "W", "T", "F", "S", "S"],
-          datasets: [{ data: chartData }]
-        }}
-        width={Dimensions.get("window").width - 40}
-        height={220}
-        chartConfig={chartConfig}
-        style={styles.chart}
-        fromZero
-      />
-
-      {/* ปุ่มไปหน้า History (ใช้ router.push) */}
-      <TouchableOpacity
-        style={styles.historyBtn}
-        onPress={() => router.push('/explore')}
-      >
-        <Text style={styles.btnText}>VIEW DETAILED HISTORY TABLE</Text>
+      <TouchableOpacity style={styles.mainBtn} onPress={() => router.push('/explore')}>
+        <Text style={styles.mainBtnTxt}>OPEN FULL LOG HISTORY</Text>
       </TouchableOpacity>
-
-      <View style={{ height: 50 }} />
-    </ScrollView>
+    </SafeAreaView>
   );
 }
 
-const chartConfig = {
-  backgroundGradientFrom: "#1E1E1E",
-  backgroundGradientTo: "#1E1E1E",
-  color: (opacity = 1) => `rgba(76, 175, 80, ${opacity})`,
-  labelColor: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-  barPercentage: 0.6,
-};
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#121212', padding: 20 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 40, marginBottom: 10 },
-  header: { color: '#4CAF50', fontSize: 22, fontWeight: 'bold' },
-  logoutTxt: { color: '#f44336', fontWeight: 'bold' },
-  pickerBox: { backgroundColor: '#1E1E1E', borderRadius: 12, marginBottom: 20, overflow: 'hidden' },
-  alertCard: { backgroundColor: '#1E1E1E', padding: 20, borderRadius: 15, borderLeftWidth: 6, borderLeftColor: '#f44336', marginBottom: 25 },
-  cardTitle: { color: '#f44336', fontSize: 14, fontWeight: 'bold', marginBottom: 8 },
-  alertText: { color: 'white', fontSize: 32, fontWeight: 'bold' },
-  subText: { color: '#aaa', fontSize: 14, marginTop: 4 },
-  sectionTitle: { color: 'white', fontSize: 18, fontWeight: '600', marginBottom: 15 },
-  chart: { borderRadius: 16, marginVertical: 8 },
-  historyBtn: { backgroundColor: '#4CAF50', padding: 18, borderRadius: 12, marginTop: 10, alignItems: 'center', elevation: 5 },
-  btnText: { color: 'white', fontWeight: 'bold', fontSize: 16 }
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 25, marginTop: 10 },
+  headerTitle: { color: '#4CAF50', fontSize: 18, fontWeight: 'bold' },
+  headerSub: { color: '#666', fontSize: 12 },
+  logoutBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#FF5252', backgroundColor: 'rgba(255, 82, 82, 0.1)' },
+  logoutTxt: { color: '#FF5252', fontSize: 12, fontWeight: 'bold' },
+  filterBar: { marginBottom: 20 },
+  tab: { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 20, marginRight: 10, backgroundColor: '#1E1E1E' },
+  activeTab: { backgroundColor: '#4CAF50' },
+  tabTxt: { color: '#666', fontWeight: 'bold', fontSize: 13 },
+  activeTabTxt: { color: '#FFF' },
+  card: { backgroundColor: '#1E1E1E', borderRadius: 25, padding: 15, alignItems: 'center' },
+  cardTitle: { color: '#FFF', fontSize: 14, marginBottom: 20 },
+  chartContainer: { flexDirection: 'row', height: 240, width: '100%' },
+  yAxis: { width: 35, justifyContent: 'space-between', alignItems: 'flex-end', paddingRight: 8, paddingBottom: 45 },
+  chartArea: { flex: 1, flexDirection: 'row', alignItems: 'flex-end', borderBottomWidth: 1, borderBottomColor: '#333', height: 180 },
+  barGroup: { alignItems: 'center', justifyContent: 'flex-end' },
+  barWrapper: { alignItems: 'center', justifyContent: 'flex-end' },
+  bar: { borderRadius: 4 },
+  barVal: { color: '#AAA', fontSize: 10, marginBottom: 5, fontWeight: 'bold' },
+  xAxis: { flexDirection: 'row', marginTop: 10 },
+  axisText: { color: '#666', fontSize: 10, fontWeight: 'bold' },
+  legend: { flexDirection: 'row', marginTop: 25 },
+  legendItem: { flexDirection: 'row', alignItems: 'center' },
+  dot: { width: 12, height: 12, borderRadius: 6, marginRight: 8 },
+  legendTxt: { color: '#AAA', fontSize: 11, fontWeight: 'bold' },
+  mainBtn: { backgroundColor: '#4CAF50', padding: 18, borderRadius: 20, marginTop: 30, alignItems: 'center' },
+  mainBtnTxt: { color: '#FFF', fontWeight: 'bold', fontSize: 16 }
 });
