@@ -42,5 +42,7 @@ app-example
 /ios
 /android
 
+# secrets
 serviceAccountKey.json
-*.json
+backend/serviceAccountKey.json
+.env
